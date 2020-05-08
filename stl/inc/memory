@@ -1789,8 +1789,7 @@ protected:
 
 // CLASS TEMPLATE _Ref_count_obj_alloc3
 template <class _Ty, class _Alloc>
-class __declspec(empty_bases) _Ref_count_obj_alloc3 : public _Ebco_base<_Rebind_alloc_t<_Alloc, _Ty>>,
-                                                      public _Ref_count_base {
+class _Ref_count_obj_alloc3 : public _Ebco_base<_Rebind_alloc_t<_Alloc, _Ty>>, public _Ref_count_base {
     // handle reference counting for object in control block, allocator
 private:
     static_assert(is_same_v<_Ty, remove_cv_t<_Ty>>, "allocate_shared should remove_cv_t");
@@ -1895,7 +1894,6 @@ template <class _Ty, size_t _Size, class _Alloc>
 void _Uninitialized_copy_multidimensional_al(const _Ty (&_In)[_Size], _Ty (&_Out)[_Size], _Alloc& _Al) {
     using _Item = remove_all_extents_t<_Ty>;
     if constexpr (conjunction_v<is_trivial<_Ty>, _Uses_default_construct<_Alloc, _Item*, const _Item&>>) {
-        (void) _Al;
         _Copy_memmove(_In, _In + _Size, _Out);
     } else if constexpr (is_array_v<_Ty>) {
         _Reverse_destroy_multidimensional_n_al_guard<_Ty, _Alloc> _Guard{_Out, 0, _Al};
@@ -1916,7 +1914,6 @@ template <class _Ty, class _Alloc>
 void _Uninitialized_value_construct_multidimensional_n_al(_Ty* const _Out, const size_t _Size, _Alloc& _Al) {
     using _Item = remove_all_extents_t<_Ty>;
     if constexpr (_Use_memset_value_construct_v<_Item*> && _Uses_default_construct<_Alloc, _Item*>::value) {
-        (void) _Al;
         _Zero_range(_Out, _Out + _Size);
     } else if constexpr (is_array_v<_Ty>) {
         _Reverse_destroy_multidimensional_n_al_guard<_Ty, _Alloc> _Guard{_Out, 0, _Al};
@@ -1942,7 +1939,6 @@ void _Uninitialized_fill_multidimensional_n_al(_Ty* const _Out, const size_t _Si
         }
         _Guard._Target = nullptr;
     } else if constexpr (_Fill_memset_is_safe<_Ty*, _Ty> && _Uses_default_construct<_Alloc, _Ty*, const _Ty&>::value) {
-        (void) _Al;
         _CSTD memset(_Out, static_cast<unsigned char>(_Val), _Size);
     } else {
         _Uninitialized_rev_destroying_backout_al _Backout{_Out, _Al};
@@ -1955,9 +1951,8 @@ void _Uninitialized_fill_multidimensional_n_al(_Ty* const _Out, const size_t _Si
 
 // CLASS TEMPLATE _Ref_count_unbounded_array_alloc
 template <class _Ty, class _Alloc>
-class __declspec(empty_bases) _Ref_count_unbounded_array_alloc
-    : public _Ebco_base<_Rebind_alloc_t<_Alloc, remove_all_extents_t<_Ty>>>,
-      public _Ref_count_base {
+class _Ref_count_unbounded_array_alloc : public _Ebco_base<_Rebind_alloc_t<_Alloc, remove_all_extents_t<_Ty>>>,
+                                         public _Ref_count_base {
     // handle reference counting for unbounded array in control block, allocator
 private:
     static_assert(is_unbounded_array_v<_Ty>);
@@ -2019,9 +2014,8 @@ private:
 
 // CLASS TEMPLATE _Ref_count_bounded_array_alloc
 template <class _Ty, class _Alloc>
-class __declspec(empty_bases) _Ref_count_bounded_array_alloc
-    : public _Ebco_base<_Rebind_alloc_t<_Alloc, remove_all_extents_t<_Ty>>>,
-      public _Ref_count_base {
+class _Ref_count_bounded_array_alloc : public _Ebco_base<_Rebind_alloc_t<_Alloc, remove_all_extents_t<_Ty>>>,
+                                       public _Ref_count_base {
     // handle reference counting for bounded array in control block, allocator
 private:
     static_assert(is_bounded_array_v<_Ty>);
