@@ -340,8 +340,9 @@ namespace test {
         static constexpr bool at_least = derived_from<Category, T>;
 
         using ReferenceType = conditional_t<to_bool(Proxy), proxy_reference<Category, Element>, Element&>;
-
     public:
+        using Consterator = iterator<Category, const Element, Diff, Eq, Proxy, Wrapped>;
+
         // output iterator operations
         iterator() = default;
 
@@ -351,6 +352,10 @@ namespace test {
         constexpr iterator& operator=(iterator&& that) noexcept {
             ptr_ = exchange(that.ptr_, nullptr);
             return *this;
+        }
+
+        constexpr operator Consterator() && noexcept {
+            return Consterator{exchange(ptr_, nullptr)};
         }
 
         [[nodiscard]] constexpr Element* peek() const noexcept {
@@ -415,8 +420,7 @@ namespace test {
             ++ptr_;
         }
 
-        [[nodiscard]] constexpr friend std::remove_cv_t<Element> iter_move(iterator const& i)
-            requires at_least<input> && std::constructible_from<std::remove_cv_t<Element>, Element> {
+        [[nodiscard]] constexpr friend Element&& iter_move(iterator const& i) requires at_least<input> {
             return std::move(*i.ptr_);
         }
 
@@ -427,6 +431,12 @@ namespace test {
         // sentinel operations (implied by forward iterator):
         iterator(iterator const&) requires (to_bool(Eq)) = default;
         iterator& operator=(iterator const&) requires (to_bool(Eq)) = default;
+
+        constexpr operator Consterator() const& noexcept
+            requires (to_bool(Eq)) {
+            return Consterator{ptr_};
+        }
+
         [[nodiscard]] constexpr boolish operator==(iterator const& that) const noexcept requires (to_bool(Eq)) {
             return {ptr_ == that.ptr_};
         }
@@ -563,6 +573,93 @@ struct std::pointer_traits<::test::iterator<std::contiguous_iterator_tag, Elemen
 namespace test {
     enum class Sized : bool { no, yes };
     enum class Common : bool { no, yes };
+    enum class CanView : bool { no, yes };
+    enum class Copyability { immobile, move_only, copyable };
+
+    namespace detail {
+        template <class Element, Copyability Copy>
+        class range_base {
+        public:
+            static_assert(Copy == Copyability::immobile);
+
+            range_base() = default;
+            constexpr explicit range_base(span<Element> elements) noexcept : elements_{elements} {}
+
+            range_base(const range_base&) = delete;
+            range_base& operator=(const range_base&) = delete;
+
+        protected:
+            [[nodiscard]] constexpr bool moved_from() const noexcept {
+                return false;
+            }
+            span<Element> elements_;
+        };
+
+        template <class Element>
+        class range_base<Element, Copyability::move_only> {
+        public:
+            range_base() = default;
+            constexpr explicit range_base(span<Element> elements) noexcept : elements_{elements} {}
+
+            constexpr range_base(range_base&& that) noexcept
+                : elements_{that.elements_}, moved_from_{that.moved_from_} {
+                that.elements_   = {};
+                that.moved_from_ = true;
+            }
+
+            constexpr range_base& operator=(range_base&& that) noexcept {
+                elements_        = that.elements_;
+                moved_from_      = that.moved_from_;
+                that.elements_   = {};
+                that.moved_from_ = true;
+                return *this;
+            }
+
+        protected:
+            [[nodiscard]] constexpr bool moved_from() const noexcept {
+                return moved_from_;
+            }
+
+            span<Element> elements_;
+
+        private:
+            bool moved_from_ = false;
+        };
+
+        template <class Element>
+        class range_base<Element, Copyability::copyable> {
+        public:
+            range_base() = default;
+            constexpr explicit range_base(span<Element> elements) noexcept : elements_{elements} {}
+
+            range_base(const range_base&) = default;
+            range_base& operator=(const range_base&) = default;
+
+            constexpr range_base(range_base&& that) noexcept
+                : elements_{that.elements_}, moved_from_{that.moved_from_} {
+                that.elements_   = {};
+                that.moved_from_ = true;
+            }
+
+            constexpr range_base& operator=(range_base&& that) noexcept {
+                elements_        = that.elements_;
+                moved_from_      = that.moved_from_;
+                that.elements_   = {};
+                that.moved_from_ = true;
+                return *this;
+            }
+
+        protected:
+            [[nodiscard]] constexpr bool moved_from() const noexcept {
+                return moved_from_;
+            }
+
+            span<Element> elements_;
+
+        private:
+            bool moved_from_ = false;
+        };
+    } // namespace detail
 
     // clang-format off
     template <class Category, class Element,
@@ -575,25 +672,30 @@ namespace test {
         // Iterator models sentinel_for with self
         CanCompare Eq = CanCompare{derived_from<Category, fwd>},
         // Use a ProxyRef reference type?
-        ProxyRef Proxy = ProxyRef{!derived_from<Category, contiguous>}>
+        ProxyRef Proxy = ProxyRef{!derived_from<Category, contiguous>},
+        // Should this range satisfy the view concept?
+        CanView IsView = CanView::no,
+        // Should this range type be copyable/movable/neither?
+        Copyability Copy = IsView == CanView::yes ? Copyability::move_only : Copyability::immobile>
         requires (!to_bool(IsCommon) || to_bool(Eq))
             && (to_bool(Eq) || !derived_from<Category, fwd>)
             && (!to_bool(Proxy) || !derived_from<Category, contiguous>)
-    class range {
-        span<Element> elements_;
+            && (!to_bool(IsView) || Copy != Copyability::immobile)
+    class range : public detail::range_base<Element, Copy> {
+    private:
         mutable bool begin_called_ = false;
+        using detail::range_base<Element, Copy>::elements_;
+
+        using detail::range_base<Element, Copy>::moved_from;
 
     public:
         using I = iterator<Category, Element, Diff, Eq, Proxy, IsWrapped::yes>;
         using S = conditional_t<to_bool(IsCommon), I, sentinel<Element, IsWrapped::yes>>;
 
-        range() = default;
-        constexpr explicit range(span<Element> elements) noexcept : elements_{elements} {}
-
-        range(range const&) = delete;
-        range& operator=(range const&) = delete;
+        using detail::range_base<Element, Copy>::range_base;
 
         [[nodiscard]] constexpr I begin() const noexcept {
+            assert(!moved_from());
             if constexpr (!derived_from<Category, fwd>) {
                 assert(!exchange(begin_called_, true));
             }
@@ -601,10 +703,12 @@ namespace test {
         }
 
         [[nodiscard]] constexpr S end() const noexcept {
+            assert(!moved_from());
             return S{elements_.data() + elements_.size()};
         }
 
         [[nodiscard]] constexpr ptrdiff_t size() const noexcept requires (to_bool(IsSized)) {
+            assert(!moved_from());
             if constexpr (!derived_from<Category, fwd>) {
                 assert(!begin_called_);
             }
@@ -612,6 +716,7 @@ namespace test {
         }
 
         [[nodiscard]] constexpr Element* data() const noexcept requires derived_from<Category, contiguous> {
+            assert(!moved_from());
             return elements_.data();
         }
 
@@ -619,12 +724,14 @@ namespace test {
         using US = conditional_t<to_bool(IsCommon), UI, sentinel<Element, IsWrapped::no>>;
 
         [[nodiscard]] constexpr UI _Unchecked_begin() const noexcept {
+            assert(!moved_from());
             if constexpr (!derived_from<Category, fwd>) {
                 assert(!exchange(begin_called_, true));
             }
             return UI{elements_.data()};
         }
         [[nodiscard]] constexpr US _Unchecked_end() const noexcept {
+            assert(!moved_from());
             return US{elements_.data() + elements_.size()};
         }
 
@@ -638,6 +745,11 @@ namespace test {
     };
     // clang-format on
 } // namespace test
+
+template <class Category, class Element, test::Sized IsSized, test::CanDifference Diff, test::Common IsCommon,
+    test::CanCompare Eq, test::ProxyRef Proxy, test::Copyability Copy>
+inline constexpr bool std::ranges::enable_view<
+    test::range<Category, Element, IsSized, Diff, IsCommon, Eq, Proxy, test::CanView::yes, Copy>> = true;
 
 template <class T>
 class basic_borrowed_range : public test::range<test::input, T, test::Sized::no, test::CanDifference::no,
@@ -959,6 +1071,56 @@ struct with_output_ranges {
 };
 
 template <class Continuation, class Element>
+struct with_input_or_output_ranges {
+    template <class... Args>
+    static constexpr void call() {
+        using namespace test;
+        using test::range;
+
+        // For all ranges, IsCommon implies Eq.
+        // For single-pass ranges, Eq is uninteresting without IsCommon (there's only one valid iterator
+        // value at a time, and no reason to compare it with itself for equality).
+        Continuation::template call<Args...,
+            range<input, Element, Sized::no, CanDifference::no, Common::no, CanCompare::no, ProxyRef::no>>();
+        Continuation::template call<Args...,
+            range<input, Element, Sized::no, CanDifference::no, Common::no, CanCompare::no, ProxyRef::yes>>();
+        Continuation::template call<Args...,
+            range<input, Element, Sized::no, CanDifference::no, Common::yes, CanCompare::yes, ProxyRef::no>>();
+        Continuation::template call<Args...,
+            range<input, Element, Sized::no, CanDifference::no, Common::yes, CanCompare::yes, ProxyRef::yes>>();
+
+        Continuation::template call<Args...,
+            range<input, Element, Sized::no, CanDifference::yes, Common::no, CanCompare::no, ProxyRef::no>>();
+        Continuation::template call<Args...,
+            range<input, Element, Sized::no, CanDifference::yes, Common::no, CanCompare::no, ProxyRef::yes>>();
+        Continuation::template call<Args...,
+            range<input, Element, Sized::no, CanDifference::yes, Common::yes, CanCompare::yes, ProxyRef::no>>();
+        Continuation::template call<Args...,
+            range<input, Element, Sized::no, CanDifference::yes, Common::yes, CanCompare::yes, ProxyRef::yes>>();
+
+        Continuation::template call<Args...,
+            range<input, Element, Sized::yes, CanDifference::no, Common::no, CanCompare::no, ProxyRef::no>>();
+        Continuation::template call<Args...,
+            range<input, Element, Sized::yes, CanDifference::no, Common::no, CanCompare::no, ProxyRef::yes>>();
+        Continuation::template call<Args...,
+            range<input, Element, Sized::yes, CanDifference::no, Common::yes, CanCompare::yes, ProxyRef::no>>();
+        Continuation::template call<Args...,
+            range<input, Element, Sized::yes, CanDifference::no, Common::yes, CanCompare::yes, ProxyRef::yes>>();
+
+        Continuation::template call<Args...,
+            range<input, Element, Sized::yes, CanDifference::yes, Common::no, CanCompare::no, ProxyRef::no>>();
+        Continuation::template call<Args...,
+            range<input, Element, Sized::yes, CanDifference::yes, Common::no, CanCompare::no, ProxyRef::yes>>();
+        Continuation::template call<Args...,
+            range<input, Element, Sized::yes, CanDifference::yes, Common::yes, CanCompare::yes, ProxyRef::no>>();
+        Continuation::template call<Args...,
+            range<input, Element, Sized::yes, CanDifference::yes, Common::yes, CanCompare::yes, ProxyRef::yes>>();
+
+        with_output_ranges<Continuation, Element>::template call<Args...>();
+    }
+};
+
+template <class Continuation, class Element>
 struct with_input_iterators {
     template <class... Args>
     static constexpr void call() {
@@ -1006,6 +1168,11 @@ constexpr void test_out() {
 template <class Instantiator, class Element>
 constexpr void test_in() {
     with_input_ranges<Instantiator, Element>::call();
+}
+
+template <class Instantiator, class Element>
+constexpr void test_inout() {
+    with_input_or_output_ranges<Instantiator, Element>::call();
 }
 
 template <class Instantiator, class Element>
@@ -1063,6 +1230,16 @@ constexpr void test_fwd_write() {
     with_forward_ranges<with_writable_iterators<Instantiator, Element2>, Element1>::call();
 }
 
+template <class Instantiator, class Element1, class Element2>
+constexpr void test_bidi_write() {
+    with_bidirectional_ranges<with_writable_iterators<Instantiator, Element2>, Element1>::call();
+}
+
+template <class Instantiator, class Element1, class Element2>
+constexpr void test_contiguous_write() {
+    with_contiguous_ranges<with_writable_iterators<Instantiator, Element2>, Element1>::call();
+}
+
 template <class Instantiator, class Element>
 constexpr void test_read() {
     with_input_iterators<Instantiator, Element>::call();
@@ -1095,3 +1272,110 @@ struct get_nth_fn {
 };
 inline constexpr get_nth_fn<0> get_first;
 inline constexpr get_nth_fn<1> get_second;
+
+template <class R>
+concept CanBegin = requires(R&& r) {
+    ranges::begin(std::forward<R>(r));
+};
+template <class R>
+concept CanMemberBegin = requires(R&& r) {
+    std::forward<R>(r).begin();
+};
+
+template <class R>
+concept CanEnd = requires(R&& r) {
+    ranges::end(std::forward<R>(r));
+};
+template <class R>
+concept CanMemberEnd = requires(R&& r) {
+    std::forward<R>(r).end();
+};
+
+template <class R>
+concept CanCBegin = requires(R&& r) {
+    ranges::cbegin(std::forward<R>(r));
+};
+template <class R>
+concept CanCEnd = requires(R&& r) {
+    ranges::cend(std::forward<R>(r));
+};
+
+template <class R>
+concept CanRBegin = requires(R&& r) {
+    ranges::rbegin(std::forward<R>(r));
+};
+template <class R>
+concept CanREnd = requires(R&& r) {
+    ranges::rend(std::forward<R>(r));
+};
+
+template <class R>
+concept CanCRBegin = requires(R&& r) {
+    ranges::crbegin(std::forward<R>(r));
+};
+template <class R>
+concept CanCREnd = requires(R&& r) {
+    ranges::crend(std::forward<R>(r));
+};
+
+template <class R>
+concept CanEmpty = requires(R&& r) {
+    ranges::empty(std::forward<R>(r));
+};
+
+template <class R>
+concept CanSize = requires(R&& r) {
+    ranges::size(std::forward<R>(r));
+};
+template <class R>
+concept CanMemberSize = requires(R&& r) {
+    std::forward<R>(r).size();
+};
+
+template <class R>
+concept CanSSize = requires(R&& r) {
+    ranges::ssize(std::forward<R>(r));
+};
+
+template <class R>
+concept CanData = requires(R&& r) {
+    ranges::data(std::forward<R>(r));
+};
+template <class R>
+concept CanMemberData = requires(R&& r) {
+    std::forward<R>(r).data();
+};
+
+template <class R>
+concept CanCData = requires(R&& r) {
+    ranges::cdata(std::forward<R>(r));
+};
+
+template <class T>
+concept CanMemberBase = requires(T&& t) {
+    std::forward<T>(t).base();
+};
+
+template <class R>
+concept CanMemberEmpty = requires(R&& r) {
+    std::forward<R>(r).empty();
+};
+
+template <class R>
+concept CanMemberFront = requires(R&& r) {
+    std::forward<R>(r).front();
+};
+template <class R>
+concept CanMemberBack = requires(R&& r) {
+    std::forward<R>(r).back();
+};
+
+template <class R>
+concept CanIndex = requires(R&& r, const ranges::range_difference_t<R> i) {
+    std::forward<R>(r)[i];
+};
+
+template <class R>
+concept CanBool = requires(R&& r) {
+    std::forward<R>(r) ? true : false;
+};
