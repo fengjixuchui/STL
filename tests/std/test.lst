@@ -354,6 +354,7 @@ tests\P0912R5_coroutine
 tests\P0919R3_heterogeneous_unordered_lookup
 tests\P0966R1_string_reserve_should_not_shrink
 tests\P1007R3_assume_aligned
+tests\P1020R1_smart_pointer_for_overwrite
 tests\P1023R0_constexpr_for_array_comparisons
 tests\P1032R1_miscellaneous_constexpr
 tests\P1135R6_atomic_flag_test
@@ -364,6 +365,7 @@ tests\P1135R6_latch
 tests\P1135R6_semaphore
 tests\P1165R1_consistently_propagating_stateful_allocators
 tests\P1423R3_char8_t_remediation
+tests\P1502R1_standard_library_header_units
 tests\P1645R1_constexpr_numeric
 tests\VSO_0000000_allocator_propagation
 tests\VSO_0000000_any_calling_conventions
